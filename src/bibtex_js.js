@@ -1,8 +1,8 @@
 ﻿/* 
-* Author = Philip Cooksey
-* Edited = July 2015
-* Website = https://github.com/pcooksey/bibtex-js
-* Credit = Henrik Mühe
+* Author = Martin Riedl
+* Edited = September 2016
+* Website = https://github.com/martin-riedl/bibtex-js
+* Credit = Philip Cooksey (https://github.com/pcooksey/bibtex-js), Henrik Mühe (https://github.com/henrik-muehe/bibtex-js)
 *
 * Issues:
 *  no comment handling within strings
@@ -391,11 +391,9 @@ function BibtexDisplay() {
       var ifTrue = true;
       var classList = cond.attr('class').split(' ');
       $.each( classList, function(index, cls){
-      	if(cls[0]=="!" &&
-      	   keys.indexOf(cls.substring(1,cls.length).toUpperCase()) < 0) {
-	      ifTrue = true;
-      	}
-        else if(keys.indexOf(cls.toUpperCase()) < 0) {
+      	if(cls[0]=="!" && keys.indexOf(cls.substring(1,cls.length).toUpperCase()) < 0) {
+          ifTrue = true;
+      	} else if(keys.indexOf(cls.toUpperCase()) < 0) {
           ifTrue = false;
         }
         cond.removeClass(cls);
@@ -407,14 +405,40 @@ function BibtexDisplay() {
       }
     } while (true);
     
+    // find all nifs and check them
+		do {
+      // find next nif
+      var conds = tpl.find(".nif");
+      if (conds.size() == 0) {
+        break;
+      }
+      
+      // check nif
+      var cond = conds.first();
+      cond.removeClass("nif");
+      var ifTrue = false;
+      var classList = cond.attr('class').split(' ');
+      $.each( classList, function(index, cls){
+        if(keys.indexOf(cls.toUpperCase()) >= 0) {
+          ifTrue = true;
+        }
+        cond.removeClass(cls);
+      });
+
+      // remove false nifs
+      if (ifTrue) {
+        cond.remove();
+      }
+    } while (true);
+    
     tpl.find('.bibtexVar').each(function() {
       var key = this.attributes["extra"].value;
-	  $.each(this.attributes, function(i, attrib){
-	     var value = attrib.value;
-	     value = value.replace("\+"+key+"\+", entry[key]);
-	     attrib.value = value;
-	  });
-	});
+      $.each(this.attributes, function(i, attrib){
+         var value = attrib.value;
+         value = value.replace("\+"+key+"\+", entry[key]);
+         attrib.value = value;
+      });
+    });
     
     // fill in remaining fields 
     for (var index in keys) {
@@ -426,11 +450,14 @@ function BibtexDisplay() {
       	tpl.find("span:not(a)." + key.toLowerCase()).html(this.displayAuthor(this.fixValue(value)));
       } else {
         tpl.find("span:not(a)." + key.toLowerCase()).html(this.fixValue(value));
+        
         var link = tpl.find("a." + key.toLowerCase()).each(function() {
-	        if(this.attributes["href"] == "") {
-			  this.attributes["href"].value = this.fixValue(value);
-			}
-		});
+          if ("href" in this.attributes) {
+            this.attributes["href"].value = this.fixValue(value); 
+          } else {
+            this.setAttribute("href", value);
+          }
+        });
       }
     }
     tpl.addClass("bibtexentry");
@@ -440,7 +467,8 @@ function BibtexDisplay() {
   this.createArray = function(entries) {
     var entriesArray = [];
     for(var entryKey in entries) {
-      entriesArray.push(entries[entryKey]);
+      var entry = entries[entryKey]
+      entriesArray.push(entry);
     }
     return entriesArray;
   }
@@ -476,6 +504,7 @@ function BibtexDisplay() {
   }
   
   this.createStructure = function(structure, output, entries, level) {
+	
     var MissingGroup = "Other Publications";
     //Used during the search
     level = level || 0;
@@ -567,6 +596,7 @@ function BibtexDisplay() {
       // iterate over bibTeX entries and add them to template
       for (var entryKey in entries) {
         var entry = entries[entryKey];
+
         // Checking if web is set to visible
         if(!entry["WEB"] || entry["WEB"].toUpperCase()!="NO") {
 	        var tpl = this.createTemplate(entry);
@@ -578,13 +608,53 @@ function BibtexDisplay() {
     }
   }
 
-  this.displayBibtex = function(input, output) {
+  this.displayBibtex = function(input, output, fCriteriaStruct) {
     // parse bibtex input
     var b = new BibtexParser();
     b.setInput(input);
     b.bibtex();
     var entries = b.getEntries();
     
+    // set not filters as default argument
+    if (typeof(fCriteriaStruct) === 'undefined') fCriteriaStruct = {}; //fCriteriaStruct = {"AUTHOR" : [{'+':[],'-':["Wikipedia", "Parr"]}]}; 
+    
+    // Apply filters in terms of conjunctive normal forms for all bibtex entries
+    for (var entryKey in entries) {
+      var entry = entries[entryKey]; 
+     
+      // iterate over all entry keys 
+      for (var fCriteriaKey in fCriteriaStruct) {
+        var fCriteriaKNF = fCriteriaStruct[fCriteriaKey];
+        var toBeChecked = entry[fCriteriaKey.toUpperCase()];
+        
+        // ignore if key could not be resolved by entry 
+        if (typeof(toBeChecked)=='undefined') continue; 
+          
+        // iterate trough the given normal form
+        for (var i=0; i<fCriteriaKNF.length; i++) {
+          var fCriteriaMT = fCriteriaKNF[i];
+         
+          // ignore an empty minterm dictionary, i.e. a minterm without literals 
+          if ($.isEmptyObject(fCriteriaMT)) continue; 
+          
+          fCMTP = []; if ('+' in fCriteriaMT) fCMTP = fCriteriaMT['+']; 
+          fCMTN = []; if ('-' in fCriteriaMT) fCMTN = fCriteriaMT['-']; 
+          
+          // check whether the literals of a minterm apply 
+          var filterCriteria_pos = fCMTP.filter(function(n) {return toBeChecked.search(n)>=0;});
+          var filterCriteria_neg = fCMTN.filter(function(n) {return toBeChecked.search(n)>=0;});
+          
+          
+          // delete an entry if it disrespects the given minterm 
+          if ((filterCriteria_pos.length==0 && fCriteriaMT['+'].length >0) | 
+            (filterCriteria_neg.length>0 && fCriteriaMT['-'].length >0) ) {
+            delete entries[entryKey];
+          }
+        }
+        
+      }
+    }
+      
     // save old entries to remove them later
     var old = output.find("*");
     
@@ -596,12 +666,11 @@ function BibtexDisplay() {
       this.createStructure(structure,output,entriesArray);
       $(".bibtex_structure").remove();
     } else {
+     
       // iterate over bibTeX entries
       for (var entryKey in entries) {
         var entry = entries[entryKey];
-        
-        tpl = this.createTemplate(entry);
-        
+        tpl = this.createTemplate(entry);        
         output.append(tpl);
         tpl.show();
       }
@@ -617,6 +686,26 @@ function bibtex_js_draw() {
   if($("#bibtex_input").length){
     (new BibtexDisplay()).displayBibtex($("#bibtex_input").val(), $("#bibtex_display"));
   } else {
+    // no filter by default  
+    var json_filter = "{}"; 
+    // try to read a filter definition from a json file
+    $('bibtexfilter').each(function(index, value) {
+       var fFilter = $(this).attr('src'); 
+       //start ajax request to read the json filter definition
+       $.ajax({
+        url: fFilter,
+        dataType: "text",
+        global: false,
+        async: false,
+        success: function(data) {
+          json_filter = data;
+        }
+      });
+    });
+    
+    // parse filter definition
+    var fCriteria = JSON.parse(json_filter);
+        
     //Gets the BibTex files and adds them together
     var bibstring = "";
     $('bibtex').each(function(index, value) {
@@ -624,9 +713,10 @@ function bibtex_js_draw() {
         bibstring += data;
       });
     });
+
     // Executed on completion of last outstanding ajax call
     $(document).ajaxStop(function() {
-      (new BibtexDisplay()).displayBibtex(bibstring, $("#bibtex_display"));
+      (new BibtexDisplay()).displayBibtex(bibstring, $("#bibtex_display"), fCriteria);
       loadExtras();
     });
   }
@@ -858,9 +948,9 @@ function authorList(object)
   	} else {
 	  	for (i = 0; i < arrayString.length; i++) {
 	  	  if(arrayString[i] in map) {
-	  		map[arrayString[i]] += 1;
+          map[arrayString[i]] += 1;
 	  	  } else {
-	  		map[arrayString[i]] = 1;
+          map[arrayString[i]] = 1;
 	  	  }
 	  	}
   	}
@@ -879,7 +969,7 @@ function authorList(object)
     var value = tuples[i][1];
     var array = key.split(" ");
     var text = array.pop()+", "+array.join(" ");
-	object.append($("<option></option>").attr("value",key).text(text));
+    object.append($("<option></option>").attr("value",key).text(text));
   }
 }
 
@@ -891,12 +981,12 @@ if (!window.jQuery) {
   document.getElementsByTagName('head')[0].appendChild(jq);
   // Poll for jQuery to come into existance
   var checkReady = function(callback) {
-      if (window.jQuery) {
-          callback(jQuery);
-      }
-      else {
-          window.setTimeout(function() { checkReady(callback); }, 100);
-      }
+    if (window.jQuery) {
+      callback(jQuery);
+    }
+    else {
+      window.setTimeout(function() { checkReady(callback); }, 100);
+    }
   };
   var defaultTemplate = "<div class=\"bibtex_template\">"+
                         "<div class=\"if author\" style=\"font-weight: bold;\">\n"+
